@@ -1,9 +1,6 @@
 name: Publicación diaria de Instagram
 
 on:
-  schedule:
-    - cron: "15 19 * * *"
-      timezone: "America/Santiago"
   workflow_dispatch:
 
 permissions:
