@@ -1,0 +1,86 @@
+name: Publicación diaria de Instagram
+
+on:
+  schedule:
+    - cron: "15 19 * * *"
+      timezone: "America/Santiago"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: instagram-daily-despachoschile2025
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: America/Santiago
+
+    steps:
+      - name: Descargar automatización
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preparar fecha de publicación
+        id: context
+        shell: bash
+        run: |
+          POST_DATE="$(TZ=America/Santiago date +%F)"
+          echo "date=$POST_DATE" >> "$GITHUB_OUTPUT"
+          if [[ -f "posts/$POST_DATE.published.json" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generar imagen y texto
+        if: steps.context.outputs.skip != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node automation/instagram/generate-post.mjs "${{ steps.context.outputs.date }}"
+
+      - name: Publicar imagen en una URL accesible
+        if: steps.context.outputs.skip != 'true'
+        id: media
+        shell: bash
+        run: |
+          git config user.name "despachoschile-bot"
+          git config user.email "despachoschile-bot@users.noreply.github.com"
+          git add "posts/${{ steps.context.outputs.date }}.jpg" "posts/${{ steps.context.outputs.date }}.caption.txt"
+          git commit -m "Generar post ${{ steps.context.outputs.date }}" || true
+          git push
+          POST_SHA="$(git rev-parse HEAD)"
+          MEDIA_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${POST_SHA}/posts/${{ steps.context.outputs.date }}.jpg"
+          echo "url=$MEDIA_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Esperar disponibilidad pública de la imagen
+        if: steps.context.outputs.skip != 'true'
+        run: sleep 15
+
+      - name: Publicar automáticamente en Instagram
+        if: steps.context.outputs.skip != 'true'
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          MEDIA_URL: ${{ steps.media.outputs.url }}
+          POST_DATE: ${{ steps.context.outputs.date }}
+          META_GRAPH_VERSION: v25.0
+        run: node automation/instagram/publish-instagram.mjs
+
+      - name: Guardar comprobante de publicación
+        if: steps.context.outputs.skip != 'true'
+        shell: bash
+        run: |
+          git add "posts/${{ steps.context.outputs.date }}.published.json" state/instagram-token.enc
+          git commit -m "Registrar publicación ${{ steps.context.outputs.date }}"
+          git push
+
+      - name: Informar publicación ya realizada
+        if: steps.context.outputs.skip == 'true'
+        run: echo "La publicación de hoy ya existe; no se duplicará."
